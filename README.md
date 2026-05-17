@@ -12,79 +12,39 @@ Research prototypes for image detection are often written in Python with NumPy/O
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Pipeline (pipeline.hpp)                  │
-│                                                                 │
-│  ┌──────────────┐   ┌────────────────┐   ┌──────────────────┐  │
-│  │ ColorImage   │   │ GrayImage      │   │ GrayImage        │  │
-│  │ (input frame)│──▶│ (foreground    │──▶│ (cleaned mask)   │  │
-│  │              │   │  mask)         │   │                  │  │
-│  └──────┬───────┘   └───────┬────────┘   └────────┬─────────┘  │
-│         │                   │                     │             │
-│         ▼                   ▼                     ▼             │
-│  ┌──────────────┐   ┌────────────────┐   ┌──────────────────┐  │
-│  │ Background   │   │  Morphology    │   │   Detection      │  │
-│  │ Model        │   │  Filter        │   │   Extractor      │  │
-│  │              │   │                │   │                  │  │
-│  │ - Running    │   │ - Erode/Dilate │   │ - Connected      │  │
-│  │   average    │   │ - Open/Close   │   │   component      │  │
-│  │ - Threshold  │   │ - Circular     │   │   labeling       │  │
-│  │   diff       │   │   kernel       │   │ - Union-Find     │  │
-│  └──────────────┘   └────────────────┘   │ - Area filter    │  │
-│                                          │ - Confidence     │  │
-│                                          └────────┬─────────┘  │
-│                                                   │             │
-│                                                   ▼             │
-│                                          ┌──────────────────┐  │
-│                                          │  Centroid        │  │
-│                                          │  Tracker         │  │
-│                                          │                  │  │
-│                                          │ - Greedy NN      │  │
-│                                          │   assignment     │  │
-│                                          │ - Track lifecycle│  │
-│                                          │   management     │  │
-│                                          │ - Motion history │  │
-│                                          └──────────────────┘  │
-│                                                                 │
-│  Output: FrameResult { detections, tracks, foreground_mask }    │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph PIPE[Pipeline pipeline.hpp]
+        CI[ColorImage<br/>input frame]
+        GI1[GrayImage<br/>foreground mask]
+        GI2[GrayImage<br/>cleaned mask]
+        BG[Background Model<br/>Running average<br/>Threshold diff]
+        MF[Morphology Filter<br/>Erode/Dilate<br/>Open/Close<br/>Circular kernel]
+        DE[Detection Extractor<br/>Connected components<br/>Union-Find labeling<br/>Area filter, Confidence]
+        CT[Centroid Tracker<br/>Greedy NN assignment<br/>Track lifecycle<br/>Motion history]
+        CI --> GI1 --> GI2
+        CI --> BG --> GI1
+        GI1 --> MF --> GI2
+        GI2 --> DE --> CT
+    end
+    OUT[Output: FrameResult<br/>detections, tracks, foreground_mask]
+    CT --> OUT
 ```
 
 ### Data Flow
 
-```
-Input Frame (BGR)
-       │
-       ▼
-  bgr_to_gray() ──── fixed-point BT.601 luminance conversion
-       │
-       ▼
-  Running Average ── accumulator[i] = α·pixel + (1-α)·accumulator[i]
-       │
-       ▼
-  Threshold ──────── |pixel - accumulator| > T  →  foreground
-       │
-       ▼
-  Morphological Open (erode → dilate) ── removes isolated noise
-       │
-       ▼
-  Morphological Close (dilate → erode) ── fills small holes
-       │
-       ▼
-  Connected Components (two-pass union-find) ── labels blobs
-       │
-       ▼
-  Filter by area ── min_area ≤ blob_area ≤ max_area
-       │
-       ▼
-  Compute centroid, bbox, confidence for each blob
-       │
-       ▼
-  Greedy Nearest-Neighbor Tracking ── match detections to tracks
-       │
-       ▼
-  Output: detections[] + tracks{} + foreground mask
+```mermaid
+flowchart TD
+    A[Input Frame BGR] --> B[bgr_to_gray<br/>fixed-point BT.601 luminance]
+    B --> C[Running Average<br/>α-blended accumulator]
+    C --> D[Threshold<br/>pixel - accumulator > T → foreground]
+    D --> E[Morphological Open<br/>erode → dilate, removes noise]
+    E --> F[Morphological Close<br/>dilate → erode, fills holes]
+    F --> G[Connected Components<br/>two-pass union-find]
+    G --> H[Filter by area<br/>min ≤ blob_area ≤ max]
+    H --> I[Compute centroid, bbox, confidence]
+    I --> J[Greedy NN Tracking<br/>match detections to tracks]
+    J --> K[Output: detections + tracks + foreground mask]
 ```
 
 ### Module Breakdown
